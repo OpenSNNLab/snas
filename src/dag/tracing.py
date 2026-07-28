@@ -1,6 +1,5 @@
 from typing import Any, Dict, Optional, Tuple
 
-import torch
 import torch.fx as fx
 import torch.nn as nn
 
@@ -25,7 +24,7 @@ class SymbolicTracer(fx.Tracer):
     │            Successful?
     │            ├─── [ YES ] ───►  [ Return fx.Graph ]
     │            │
-    │            [ NO ] (Throws torch.fx.proxy.TraceError)
+    │            [ NO ] (Throws fx.proxy.TraceError)
     │            │
     │            ▼
     │          ┌──────────────────────┐
@@ -82,5 +81,5 @@ class SymbolicTracer(fx.Tracer):
     ) -> Any:
         try:
             return super().call_module(m, forward, args, kwargs)
-        except torch.fx.proxy.TraceError:
+        except fx.proxy.TraceError:
             raise ControlFlowDetected(type(m))
