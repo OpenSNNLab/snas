@@ -1,3 +1,4 @@
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -103,3 +104,40 @@ class Graph:
         for dependencies in self.routing_map.values():
             if node in dependencies:
                 dependencies.remove(node)
+
+    def compute_execution_order(self) -> None:
+        in_degree: Dict[str, int] = {
+            node: len(deps) for node, deps in self.routing_map.items()
+        }
+
+        dependents: Dict[str, List[str]] = {node: [] for node in self.routing_map}
+
+        for dst, deps in self.routing_map.items():
+            for src in deps:
+                if src not in dependents:
+                    dependents[src] = []
+                    in_degree[src] = 0
+                dependents[src].append(dst)
+
+        queue: deque[str] = deque(
+            [node for node, degree in in_degree.items() if degree == 0]
+        )
+        order: List[str] = []
+
+        while queue:
+            current = queue.popleft()
+            order.append(current)
+
+            for dependent in dependents[current]:
+                in_degree[dependent] -= 1
+                if in_degree[dependent] == 0:
+                    queue.append(dependent)
+
+        if len(order) != len(in_degree):
+            unresolved = {node for node, degree in in_degree.items() if degree > 0}
+            raise RuntimeError(
+                "Cyclic dependency detected."
+                f" The following nodes could not be resolved: {unresolved}"
+            )
+
+        self.execution_order = order
