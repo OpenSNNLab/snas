@@ -1,4 +1,4 @@
-from typing import Any, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Tuple
 
 import torch.fx as fx
 import torch.nn as nn
@@ -59,6 +59,39 @@ class DAG(nn.Module):
         super().__init__()
         self.topology = Graph()
         self.module_pool = nn.ModuleDict()
+
+    def forward(self, *args, **kwargs) -> Any:
+        total_inputs = len(args) + len(kwargs)
+        expected_inputs = len(self.topology.input_keys)
+        if total_inputs > expected_inputs:
+            raise ValueError(f"Expected {expected_inputs} inputs, got {total_inputs}")
+
+        cache: Dict[str, Any] = {}
+
+        for i, key in enumerate(self.topology.input_keys):
+            if i < len(args):
+                cache[key] = args[i]
+            elif key in kwargs:
+                cache[key] = kwargs[key]
+            else:
+                raise ValueError(f"Missing required input for graph node: '{key}'")
+
+        for node_name in self.topology.execution_order:
+            if node_name in cache:
+                continue
+
+            module = self.module_pool[node_name]
+
+            deps = self.topology.routing_map.get(node_name, [])
+            inputs = [cache[dep] for dep in deps]
+
+            cache[node_name] = module(*inputs)
+
+        outputs = tuple(cache[key] for key in self.topology.output_keys)
+
+        if len(outputs) == 1:
+            return outputs[0]
+        return outputs
 
     @staticmethod
     def _parse_args(args: Any, kwargs: Any) -> Tuple[Any, Any, List[str]]:
