@@ -1,3 +1,4 @@
+import copy
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import torch.fx as fx
@@ -59,6 +60,7 @@ class DAG(nn.Module):
         super().__init__()
         self.topology = Graph()
         self.module_pool = nn.ModuleDict()
+        self._is_locked = False
 
     def forward(self, *args, **kwargs) -> Any:
         total_inputs = len(args) + len(kwargs)
@@ -183,6 +185,7 @@ class DAG(nn.Module):
                         dag.topology.output_keys = [output_args.name]
                     else:
                         raise TypeError(f"Unsupported output type: {type(output_args)}")
+        dag._is_locked = True
 
         return dag
 
@@ -225,6 +228,14 @@ class DAG(nn.Module):
         graph.output(out_nodes[0] if len(out_nodes) == 1 else out_nodes)
 
         return fx.GraphModule(self, graph)
+
+    def clone(self) -> "DAG":
+        new_dag = DAG()
+        new_dag.topology = copy.deepcopy(self.topology)
+        new_dag.module_pool = copy.deepcopy(self.module_pool)
+        new_dag._is_locked = False
+
+        return new_dag
 
     def draw(
         self,
