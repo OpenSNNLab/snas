@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import torch.fx as fx
 import torch.nn as nn
@@ -225,3 +225,135 @@ class DAG(nn.Module):
         graph.output(out_nodes[0] if len(out_nodes) == 1 else out_nodes)
 
         return fx.GraphModule(self, graph)
+
+    def draw(
+        self,
+        backend: str = "graphviz",
+        filepath: Optional[str] = None,
+        format: str = "png",
+    ) -> Any:
+        if backend == "ascii":
+            return self._draw_ascii()
+        elif backend == "graphviz":
+            return self._draw_graphviz(filepath, format)
+        else:
+            raise ValueError(
+                f"Unsupported backend '{backend}'. Use 'graphviz' or 'ascii'."
+            )
+
+    def _draw_ascii(self) -> str:
+        lines: List[str] = []
+        visited = set()
+
+        def dfs(node: str, prefix: str, is_last: bool) -> None:
+            connector = "└── " if is_last else "├── "
+            lines.append(f"{prefix}{connector}{node}")
+
+            if node in visited:
+                lines[-1] += " (shared constraint)"
+                return
+            visited.add(node)
+
+            deps = self.topology.routing_map.get(node, [])
+            for i, dep in enumerate(deps):
+                extension = "    " if is_last else "│   "
+                dfs(dep, prefix + extension, i == (len(deps) - 1))
+
+        lines.append("[ DAG Output Dependencies ]")
+        for i, out_node in enumerate(self.topology.output_keys):
+            dfs(out_node, "", i == (len(self.topology.output_keys) - 1))
+
+        return "\n".join(lines)
+
+    def _draw_graphviz(self, filepath: Optional[str], format: str) -> Any:
+        try:
+            import graphviz
+        except ImportError:
+            raise ImportError(
+                "The 'graphviz' library is required for this backend. "
+                "Install it using: pip install graphviz"
+            )
+
+        dot = graphviz.Digraph(comment="DAG Topology")
+
+        dot.attr(
+            rankdir="LR",  # Left to Right pipeline
+            splines="spline",  # Smooth edges
+            nodesep="0.6",  # Vertical spacing
+            ranksep="0.8",  # Horizontal spacing
+            fontname="Helvetica",
+        )
+
+        dot.attr("edge", color="#94a3b8", penwidth="1.5", arrowsize="0.8")
+
+        def get_node_label(node_key: str, is_input: bool, is_output: bool) -> str:
+            mod_label = ""
+            if not is_input:
+                mod = (
+                    self.module_pool[node_key] if node_key in self.module_pool else None
+                )
+
+                if isinstance(mod, OpModule):
+                    tgt_name = getattr(mod.target, "__name__", str(mod.target))
+                    mod_label = (
+                        f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name}</FONT>"
+                    )
+                elif mod is not None:
+                    mod_label = f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{mod.__class__.__name__}</FONT>"
+
+            tag = ""
+            if is_input:
+                tag = "<BR/><FONT POINT-SIZE='9' COLOR='#166534'>[Input]</FONT>"
+            elif is_output:
+                tag = "<BR/><FONT POINT-SIZE='9' COLOR='#1e3a8a'>[Output]</FONT>"
+
+            return f"<{node_key}{mod_label}{tag}>"
+
+        for key in self.topology.execution_order:
+            is_input = key in self.topology.input_keys
+            is_output = key in self.topology.output_keys
+
+            label = get_node_label(key, is_input, is_output)
+
+            if is_input:
+                dot.node(
+                    key,
+                    label=label,
+                    shape="rect",
+                    style="rounded,filled",
+                    fillcolor="#dcfce7",
+                    color="#22c55e",
+                    penwidth="2",
+                    fontname="Helvetica",
+                )
+            elif is_output:
+                dot.node(
+                    key,
+                    label=label,
+                    shape="rect",
+                    style="rounded,filled",
+                    fillcolor="#dbeafe",
+                    color="#3b82f6",
+                    penwidth="3",
+                    fontname="Helvetica",
+                )
+            else:
+                dot.node(
+                    key,
+                    label=label,
+                    shape="rect",
+                    style="rounded,filled",
+                    fillcolor="#f8fafc",
+                    color="#cbd5e1",
+                    penwidth="1.5",
+                    fontname="Helvetica",
+                )
+
+        for dst, deps in self.topology.routing_map.items():
+            for src in deps:
+                dot.edge(src, dst)
+
+        if filepath:
+            dot.render(filepath, format=format, cleanup=True)
+
+        return dot
