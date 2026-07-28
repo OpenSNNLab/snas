@@ -1,6 +1,6 @@
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -28,10 +28,40 @@ class Graph:
     """
 
     routing_map: Dict[str, List[str]] = field(default_factory=dict)
-
     input_keys: List[str] = field(default_factory=list)
     output_keys: List[str] = field(default_factory=list)
     execution_order: List[str] = field(default_factory=list)
+
+    def reevaluate(self) -> None:
+        if not self.routing_map:
+            return
+
+        all_sources = {}
+        for deps in self.routing_map.values():
+            for src in deps:
+                all_sources[src] = None
+
+        if not self.input_keys:
+            explicit_inputs = [n for n, d in self.routing_map.items() if not d]
+            implicit_inputs = [s for s in all_sources if s not in self.routing_map]
+            self.input_keys = explicit_inputs + implicit_inputs
+
+        if not self.output_keys:
+            self.output_keys = [
+                n for n in self.routing_map.keys() if n not in all_sources
+            ]
+
+        self.compute_execution_order()
+
+    def __post_init__(self) -> None:
+        self.reevaluate()
+
+    def __enter__(self) -> "Graph":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is None:  # no exception occurred
+            self.reevaluate()
 
     def _get_insertion_index(
         self,
