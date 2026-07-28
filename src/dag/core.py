@@ -185,3 +185,43 @@ class DAG(nn.Module):
                         raise TypeError(f"Unsupported output type: {type(output_args)}")
 
         return dag
+
+    def to_module(self) -> fx.GraphModule:
+        graph = fx.Graph()
+        cache: Dict[str, fx.Node] = {}
+
+        for key in self.topology.input_keys:
+            cache[key] = graph.placeholder(key)
+
+        for node in self.topology.execution_order:
+            if node in self.topology.input_keys:
+                continue
+
+            mod = self.module_pool[node]
+            inputs = [
+                cache[in_key] for in_key in self.topology.routing_map.get(node, [])
+            ]
+
+            if isinstance(mod, OpModule):
+                input_iter = iter(inputs)
+
+                resolved_args = OpModule._resolve_schema(mod.args_schema, input_iter)
+                resolved_kwargs = OpModule._resolve_schema(
+                    mod.kwargs_schema, input_iter
+                )
+
+                if mod.is_method:
+                    cache[node] = graph.call_method(
+                        mod.target, tuple(resolved_args), resolved_kwargs
+                    )
+                else:
+                    cache[node] = graph.call_function(
+                        mod.target, tuple(resolved_args), resolved_kwargs
+                    )
+            else:
+                cache[node] = graph.call_module(f"module_pool.{node}", tuple(inputs))
+
+        out_nodes = tuple(cache[k] for k in self.topology.output_keys)
+        graph.output(out_nodes[0] if len(out_nodes) == 1 else out_nodes)
+
+        return fx.GraphModule(self, graph)
