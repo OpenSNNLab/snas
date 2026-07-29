@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "snas"
+version = "0.0.1"
+description = "Spiking Neural Architecture Search"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Ibrahim Sayed" },
+]
+dependencies = [
+  "torch",
+]
