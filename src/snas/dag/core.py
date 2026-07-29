@@ -6,10 +6,9 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 import torch.fx as fx
 import torch.nn as nn
 
-from structure import Graph
-from tracing import SymbolicTracer
-
-# from plugins import BasePlugin
+from ..plugins.base import BasePlugin
+from .structure import Graph
+from .tracing import SymbolicTracer
 
 
 class NodePlaceholder:
