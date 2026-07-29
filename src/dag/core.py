@@ -9,6 +9,8 @@ import torch.nn as nn
 from structure import Graph
 from tracing import SymbolicTracer
 
+# from plugins import BasePlugin
+
 
 class NodePlaceholder:
     def __repr__(self) -> str:
@@ -284,6 +286,47 @@ class DAG(nn.Module):
                     self.topology.output_keys[idx] = new_node
 
         return self
+
+    def get_plugins(
+        self,
+        plugin_type: type = BasePlugin,
+        group_by: str = "type",
+    ) -> Dict[str, Any]:
+        if not issubclass(plugin_type, BasePlugin):
+            raise TypeError(f"{plugin_type.__name__} must inherit from BasePlugin.")
+
+        collected_plugins = {}
+
+        for node_name, plugin_instance in self.module_pool.items():
+            if not isinstance(plugin_instance, plugin_type):
+                continue
+
+            plugin_class_name = plugin_instance.__class__.__name__
+            suffix = f"_{plugin_class_name}"
+
+            if not node_name.endswith(suffix):
+                continue
+
+            target_node = node_name[: -len(suffix)]
+
+            if plugin_type is not BasePlugin:
+                collected_plugins[target_node] = plugin_instance
+                continue
+
+            if group_by == "type":
+                if plugin_class_name not in collected_plugins:
+                    collected_plugins[plugin_class_name] = {}
+                collected_plugins[plugin_class_name][target_node] = plugin_instance
+
+            elif group_by == "layer":
+                if target_node not in collected_plugins:
+                    collected_plugins[target_node] = {}
+                collected_plugins[target_node][plugin_class_name] = plugin_instance
+
+            else:
+                raise ValueError("group_by must be 'type' or 'layer'")
+
+        return collected_plugins
 
     def draw(
         self,
