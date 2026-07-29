@@ -1,4 +1,5 @@
 import copy
+from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import torch.fx as fx
@@ -229,13 +230,18 @@ class DAG(nn.Module):
 
         return fx.GraphModule(self, graph)
 
-    def clone(self) -> "DAG":
+    @contextmanager
+    def clone(self):
         new_dag = DAG()
         new_dag.topology = copy.deepcopy(self.topology)
         new_dag.module_pool = copy.deepcopy(self.module_pool)
         new_dag._is_locked = False
 
-        return new_dag
+        try:
+            yield new_dag
+        finally:
+            new_dag.topology.compute_execution_order()
+            new_dag._is_locked = True
 
     def draw(
         self,
