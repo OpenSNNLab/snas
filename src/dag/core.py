@@ -1,6 +1,7 @@
 import copy
+import re
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch.fx as fx
 import torch.nn as nn
@@ -242,6 +243,47 @@ class DAG(nn.Module):
         finally:
             new_dag.topology.compute_execution_order()
             new_dag._is_locked = True
+
+    def _resolve_target_names(self, pattern: Union[str, List[str]]) -> List[str]:
+        if isinstance(pattern, list):
+            return pattern
+
+        if "*" in pattern:
+            regex = re.compile(pattern.replace("*", ".*"))
+            return [n for n in self.topology.routing_map.keys() if regex.match(n)]
+
+        if pattern not in self.topology.routing_map:
+            raise ValueError(f"Target node '{pattern}' not found in graph.")
+
+        return [pattern]
+
+    def insert(self, module: nn.Module, after: Union[str, List[str]]) -> "DAG":
+        if self._is_locked:
+            raise RuntimeError(
+                "This DAG is locked! "
+                "Modifications must be done inside the `with dag.clone():` context."
+            )
+
+        targets = self._resolve_target_names(after)
+
+        with self.topology:
+            for target in targets:
+                module_name = module.__class__.__name__
+                new_node = f"{target}_{module_name}"
+
+                self.module_pool[new_node] = copy.deepcopy(module)
+
+                for _, deps in self.topology.routing_map.items():
+                    if target in deps:
+                        deps[deps.index(target)] = new_node
+
+                self.topology.routing_map[new_node] = [target]
+
+                if target in self.topology.output_keys:
+                    idx = self.topology.output_keys.index(target)
+                    self.topology.output_keys[idx] = new_node
+
+        return self
 
     def draw(
         self,
