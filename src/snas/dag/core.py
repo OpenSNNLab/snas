@@ -69,39 +69,28 @@ class DAG(nn.Module):
         self.topology = Graph()
         self.module_pool = nn.ModuleDict()
         self._is_locked = False
+        self._execution_plan = []
 
     def forward(self, *args, **kwargs) -> Any:
-        total_inputs = len(args) + len(kwargs)
         expected_inputs = len(self.topology.input_keys)
-        if total_inputs > expected_inputs:
-            raise ValueError(f"Expected {expected_inputs} inputs, got {total_inputs}")
+        if len(args) + len(kwargs) > expected_inputs:
+            raise ValueError(
+                f"Expected {expected_inputs} inputs, got {len(args) + len(kwargs)}"
+            )
 
-        cache: Dict[str, Any] = {}
-
-        for i, key in enumerate(self.topology.input_keys):
-            if i < len(args):
-                cache[key] = args[i]
-            elif key in kwargs:
+        cache: Dict[str, Any] = dict(zip(self.topology.input_keys, args))
+        for key in self.topology.input_keys[len(args) :]:
+            try:
                 cache[key] = kwargs[key]
-            else:
+            except KeyError:
                 raise ValueError(f"Missing required input for graph node: '{key}'")
 
-        for node_name in self.topology.execution_order:
-            if node_name in cache:
-                continue
-
-            module = self.module_pool[node_name]
-
-            deps = self.topology.routing_map.get(node_name, [])
-            inputs = [cache[dep] for dep in deps]
-
+        for node_name, module, deps in self._execution_plan:
+            inputs = tuple(cache[dep] for dep in deps)
             cache[node_name] = module(*inputs)
 
         outputs = tuple(cache[key] for key in self.topology.output_keys)
-
-        if len(outputs) == 1:
-            return outputs[0]
-        return outputs
+        return outputs[0] if len(outputs) == 1 else outputs
 
     @contextmanager
     def clone(self):
@@ -110,10 +99,13 @@ class DAG(nn.Module):
         new_dag.module_pool = copy.deepcopy(self.module_pool)
         new_dag._is_locked = False
 
+        new_dag._compile_execution_plan()
+
         try:
             yield new_dag
         finally:
             new_dag.topology.compute_execution_order()
+            new_dag._compile_execution_plan()
             new_dag._is_locked = True
 
     def insert(self, module: nn.Module, after: Union[str, List[str]]) -> "DAG":
@@ -133,15 +125,17 @@ class DAG(nn.Module):
                 self.module_pool[new_node] = copy.deepcopy(module)
 
                 for _, deps in self.topology.routing_map.items():
-                    if target in deps:
-                        deps[deps.index(target)] = new_node
+                    for i, dep in enumerate(deps):
+                        if dep == target:
+                            deps[i] = new_node
 
                 self.topology.routing_map[new_node] = [target]
 
-                if target in self.topology.output_keys:
-                    idx = self.topology.output_keys.index(target)
-                    self.topology.output_keys[idx] = new_node
+                for i, out_key in enumerate(self.topology.output_keys):
+                    if out_key == target:
+                        self.topology.output_keys[i] = new_node
 
+        self._compile_execution_plan()
         return self
 
     def get_plugins(
@@ -161,10 +155,10 @@ class DAG(nn.Module):
             plugin_class_name = plugin_instance.__class__.__name__
             suffix = f"_{plugin_class_name}"
 
-            if not node_name.endswith(suffix):
-                continue
-
-            target_node = node_name[: -len(suffix)]
+            if node_name.endswith(suffix):
+                target_node = node_name[: -len(suffix)]
+            else:
+                target_node = node_name
 
             if plugin_type is not BasePlugin:
                 collected_plugins[target_node] = plugin_instance
@@ -312,9 +306,21 @@ class DAG(nn.Module):
                         dag.topology.output_keys = [output_args.name]
                     else:
                         raise TypeError(f"Unsupported output type: {type(output_args)}")
+
+        dag._compile_execution_plan()
         dag._is_locked = True
 
         return dag
+
+    def _compile_execution_plan(self):
+        self._execution_plan = []
+        for node_name in self.topology.execution_order:
+            if node_name in self.topology.input_keys:
+                continue
+
+            module = self.module_pool[node_name]
+            deps = tuple(self.topology.routing_map.get(node_name, []))
+            self._execution_plan.append((node_name, module, deps))
 
     @staticmethod
     def _parse_args(args: Any, kwargs: Any) -> Tuple[Any, Any, List[str]]:
