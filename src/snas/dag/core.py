@@ -1,10 +1,11 @@
 import copy
 import re
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch.fx as fx
 import torch.nn as nn
+import torch.utils._pytree as pytree
 
 from ..plugins.base import BasePlugin
 from .structure import Graph
