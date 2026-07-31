@@ -138,6 +138,27 @@ class DAG(nn.Module):
         self._compile_execution_plan()
         return self
 
+    def wrap(self, wrapper_cls: type, target: Union[str, List[str]], **kwargs) -> "DAG":
+        if self._is_locked:
+            raise RuntimeError(
+                "This DAG is locked! "
+                "Modifications must be done inside the `with dag.clone():` context."
+            )
+
+        if not issubclass(wrapper_cls, BaseWrapper):
+            raise TypeError(f"{wrapper_cls.__name__} must inherit from BaseWrapper.")
+
+        targets = self._resolve_target_names(target)
+
+        for node_name in targets:
+            original_module = self.module_pool[node_name]
+            wrapped_module = wrapper_cls(original_module, **kwargs)
+            self.module_pool[node_name] = wrapped_module
+
+        self._compile_execution_plan()
+
+        return self
+
     def get_plugins(
         self,
         plugin_type: type = BasePlugin,
