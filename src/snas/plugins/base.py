@@ -33,3 +33,9 @@ class BasePlugin(nn.Module):
 
     def clear(self) -> None:
         self._result = None
+
+
+class BaseWrapper(BasePlugin):
+    def __init__(self, target_module: nn.Module) -> None:
+        super().__init__()
+        self.target_module = target_module
