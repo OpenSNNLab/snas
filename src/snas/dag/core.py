@@ -26,34 +26,37 @@ class OpModule(nn.Module):
     ) -> None:
         super().__init__()
         self.target = target
-        self.args_schema = args_schema if args_schema is not None else tuple()
-        self.kwargs_schema = kwargs_schema if kwargs_schema is not None else dict()
         self.is_method = is_method
 
-    @staticmethod
-    def _resolve_schema(schema: Any, input_iter: Iterator[Any]) -> Any:
-        if isinstance(schema, NodePlaceholder):
-            return next(input_iter)
-        if isinstance(schema, tuple):
-            return tuple(OpModule._resolve_schema(x, input_iter) for x in schema)
-        if isinstance(schema, list):
-            return [OpModule._resolve_schema(x, input_iter) for x in schema]
-        if isinstance(schema, dict):
-            return {
-                k: OpModule._resolve_schema(v, input_iter) for k, v in schema.items()
-            }
-        return schema
+        self.args_flat, self.args_spec = pytree.tree_flatten(args_schema or tuple())
+        self.kwargs_flat, self.kwargs_spec = pytree.tree_flatten(
+            kwargs_schema or dict()
+        )
+
+        self._arg_placeholders = [
+            i for i, x in enumerate(self.args_flat) if isinstance(x, NodePlaceholder)
+        ]
+        self._kwarg_placeholders = [
+            i for i, x in enumerate(self.kwargs_flat) if isinstance(x, NodePlaceholder)
+        ]
 
     def forward(self, *inputs: Any) -> Any:
         input_iter = iter(inputs)
 
-        resolved_args = self._resolve_schema(self.args_schema, input_iter)
-        resolved_kwargs = self._resolve_schema(self.kwargs_schema, input_iter)
+        resolved_args_flat = list(self.args_flat)
+        for idx in self._arg_placeholders:
+            resolved_args_flat[idx] = next(input_iter)
+
+        resolved_kwargs_flat = list(self.kwargs_flat)
+        for idx in self._kwarg_placeholders:
+            resolved_kwargs_flat[idx] = next(input_iter)
+
+        resolved_args = pytree.tree_unflatten(resolved_args_flat, self.args_spec)
+        resolved_kwargs = pytree.tree_unflatten(resolved_kwargs_flat, self.kwargs_spec)
 
         if self.is_method:
-            obj = resolved_args[0]
-            method = getattr(obj, self.target)
-            return method(*resolved_args[1:], **resolved_kwargs)
+            obj, *rest_args = resolved_args
+            return getattr(obj, self.target)(*rest_args, **resolved_kwargs)
 
         return self.target(*resolved_args, **resolved_kwargs)
 
