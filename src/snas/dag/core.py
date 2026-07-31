@@ -1,4 +1,5 @@
 import copy
+import os
 import re
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -7,7 +8,7 @@ import torch.fx as fx
 import torch.nn as nn
 import torch.utils._pytree as pytree
 
-from ..plugins.base import BasePlugin
+from ..plugins.base import BasePlugin, BaseWrapper
 from .structure import Graph
 from .tracing import SymbolicTracer
 
@@ -184,20 +185,22 @@ class DAG(nn.Module):
 
         return collected_plugins
 
-    def draw(
-        self,
-        backend: str = "graphviz",
-        filepath: Optional[str] = None,
-        format: str = "png",
-    ) -> Any:
-        if backend == "ascii":
-            return self._draw_ascii()
-        elif backend == "graphviz":
-            return self._draw_graphviz(filepath, format)
-        else:
-            raise ValueError(
-                f"Unsupported backend '{backend}'. Use 'graphviz' or 'ascii'."
-            )
+    def draw(self, filepath: Optional[str] = None) -> Any:
+        if filepath is None:
+            ascii_tree = self._draw_ascii()
+            print(ascii_tree)
+            return ascii_tree
+
+        base_name, ext = os.path.splitext(filepath)
+        fmt = ext.lstrip(".").lower()
+
+        if not fmt:
+            fmt = "png"
+
+        if fmt not in ["svg", "png", "pdf", "jpg", "jpeg"]:
+            raise ValueError(f"Unsupported file extension '.{fmt}'. Use .svg or .png")
+
+        return self._draw_graphviz(filepath=base_name, format=fmt)
 
     def to_module(self) -> fx.GraphModule:
         graph = fx.Graph()
@@ -352,7 +355,19 @@ class DAG(nn.Module):
 
         def dfs(node: str, prefix: str, is_last: bool) -> None:
             connector = "└── " if is_last else "├── "
-            lines.append(f"{prefix}{connector}{node}")
+
+            stats_label = ""
+            mod = self.module_pool[node] if node in self.module_pool else None
+
+            if isinstance(mod, BaseWrapper):
+                wrapper_name = mod.__class__.__name__
+                if hasattr(mod, "_result") and mod._result is not None:
+                    stats = mod.result.to_console()
+                    stats_label = f"  [{wrapper_name} -> {stats}]"
+                else:
+                    stats_label = f"  [Wrapped: {wrapper_name}]"
+
+            lines.append(f"{prefix}{connector}{node}{stats_label}")
 
             if node in visited:
                 lines[-1] += " (shared constraint)"
@@ -393,12 +408,22 @@ class DAG(nn.Module):
 
         def get_node_label(node_key: str, is_input: bool, is_output: bool) -> str:
             mod_label = ""
+            stats_label = ""
             if not is_input:
                 mod = (
                     self.module_pool[node_key] if node_key in self.module_pool else None
                 )
 
-                if isinstance(mod, OpModule):
+                if isinstance(mod, BaseWrapper):
+                    tgt_name = mod.target_module.__class__.__name__
+                    wrapper_name = mod.__class__.__name__
+                    mod_label = f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name} (Wrapped: {wrapper_name})</FONT>"
+
+                    if hasattr(mod, "_result") and mod._result is not None:
+                        stats = mod.result.to_console()
+                        stats_label = f"<BR/><FONT POINT-SIZE='9' COLOR='#b91c1c'>[{stats}]</FONT>"
+
+                elif isinstance(mod, OpModule):
                     tgt_name = getattr(mod.target, "__name__", str(mod.target))
                     mod_label = (
                         f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name}</FONT>"
@@ -412,7 +437,7 @@ class DAG(nn.Module):
             elif is_output:
                 tag = "<BR/><FONT POINT-SIZE='9' COLOR='#1e3a8a'>[Output]</FONT>"
 
-            return f"<{node_key}{mod_label}{tag}>"
+            return f"<{node_key}{mod_label}{tag}{stats_label}>"
 
         for key in self.topology.execution_order:
             is_input = key in self.topology.input_keys
