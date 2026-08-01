@@ -138,7 +138,13 @@ class DAG(nn.Module):
         self._compile_execution_plan()
         return self
 
-    def wrap(self, wrapper_cls: type, target: Union[str, List[str]], **kwargs) -> "DAG":
+    def wrap(
+        self,
+        wrapper_cls,
+        target: Union[str, List[str]],
+        include_io: bool = False,
+        **kwargs,
+    ) -> "DAG":
         if self._is_locked:
             raise RuntimeError(
                 "This DAG is locked! "
@@ -148,7 +154,7 @@ class DAG(nn.Module):
         if not issubclass(wrapper_cls, BaseWrapper):
             raise TypeError(f"{wrapper_cls.__name__} must inherit from BaseWrapper.")
 
-        targets = self._resolve_target_names(target)
+        targets = self._resolve_target_names(target, include_io=include_io)
 
         for node_name in targets:
             original_module = self.module_pool[node_name]
@@ -363,13 +369,24 @@ class DAG(nn.Module):
         kwargs_schema = map_fn(kwargs)
         return args_schema, kwargs_schema, dependencies
 
-    def _resolve_target_names(self, pattern: Union[str, List[str]]) -> List[str]:
+    def _resolve_target_names(
+        self, pattern: Union[str, List[str]], include_io: bool = False
+    ) -> List[str]:
         if isinstance(pattern, list):
             return pattern
 
         if "*" in pattern:
-            regex = re.compile(pattern.replace("*", ".*"))
-            return [n for n in self.topology.routing_map.keys() if regex.match(n)]
+            regex_str = pattern.replace("*", ".*")
+            regex = re.compile(f"^{regex_str}$")
+
+            matched_nodes = [
+                n for n in self.topology.routing_map.keys() if regex.match(n)
+            ]
+
+            if not include_io:
+                matched_nodes = [n for n in matched_nodes if n in self.module_pool]
+
+            return matched_nodes
 
         if pattern not in self.topology.routing_map:
             raise ValueError(f"Target node '{pattern}' not found in graph.")
