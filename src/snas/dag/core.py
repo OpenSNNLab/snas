@@ -113,6 +113,27 @@ class DAG(nn.Module):
             new_dag._compile_execution_plan()
             new_dag._is_locked = True
 
+    def attach(
+        self,
+        plugin: Union[type, nn.Module],
+        target: Union[str, List[str]],
+        mode: str = "auto",
+        **kwargs,
+    ) -> "DAG":
+        if mode == "auto":
+            mode = getattr(plugin, "default_attach_mode", "after")
+
+        if mode == "wrap":
+            return self.wrap(plugin, target, **kwargs)
+
+        elif mode == "after":
+            return self.insert(plugin, after=target)
+
+        else:
+            raise ValueError(
+                f"Unknown attach mode: '{mode}'. Must be 'wrap' or 'after'."
+            )
+
     def insert(self, module: nn.Module, after: Union[str, List[str]]) -> "DAG":
         if self._is_locked:
             raise RuntimeError(
