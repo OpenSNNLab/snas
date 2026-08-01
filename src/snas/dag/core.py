@@ -128,17 +128,19 @@ class DAG(nn.Module):
                 new_node = f"{target}_{module_name}"
 
                 self.module_pool[new_node] = copy.deepcopy(module)
-
-                for _, deps in self.topology.routing_map.items():
-                    for i, dep in enumerate(deps):
-                        if dep == target:
-                            deps[i] = new_node
-
                 self.topology.routing_map[new_node] = [target]
 
-                for i, out_key in enumerate(self.topology.output_keys):
-                    if out_key == target:
-                        self.topology.output_keys[i] = new_node
+                for node, deps in self.topology.routing_map.items():
+                    if node == new_node:
+                        continue
+                    self.topology.routing_map[node] = [
+                        new_node if d == target else d for d in deps
+                    ]
+
+                self.topology.output_keys = [
+                    new_node if out == target else out
+                    for out in self.topology.output_keys
+                ]
 
         self._compile_execution_plan()
         return self
