@@ -42,7 +42,7 @@ class OpModule(nn.Module):
             i for i, x in enumerate(self.kwargs_flat) if isinstance(x, NodePlaceholder)
         ]
 
-    def forward(self, *inputs: Any) -> Any:
+    def bind_inputs(self, inputs: tuple) -> Tuple[Any, Any]:
         input_iter = iter(inputs)
 
         resolved_args_flat = list(self.args_flat)
@@ -55,6 +55,11 @@ class OpModule(nn.Module):
 
         resolved_args = pytree.tree_unflatten(resolved_args_flat, self.args_spec)
         resolved_kwargs = pytree.tree_unflatten(resolved_kwargs_flat, self.kwargs_spec)
+
+        return resolved_args, resolved_kwargs
+
+    def forward(self, *inputs: Any) -> Any:
+        resolved_args, resolved_kwargs = self.bind_inputs(inputs)
 
         if self.is_method:
             obj, *rest_args = resolved_args
@@ -240,12 +245,7 @@ class DAG(nn.Module):
             ]
 
             if isinstance(mod, OpModule):
-                input_iter = iter(inputs)
-
-                resolved_args = OpModule._resolve_schema(mod.args_schema, input_iter)
-                resolved_kwargs = OpModule._resolve_schema(
-                    mod.kwargs_schema, input_iter
-                )
+                resolved_args, resolved_kwargs = mod.bind_inputs(inputs)
 
                 if mod.is_method:
                     cache[node] = graph.call_method(
