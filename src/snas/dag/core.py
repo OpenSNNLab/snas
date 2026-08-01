@@ -1,8 +1,9 @@
 import copy
 import os
 import re
+from collections import defaultdict
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch.fx as fx
 import torch.nn as nn
@@ -84,18 +85,19 @@ class DAG(nn.Module):
             )
 
         cache: Dict[str, Any] = dict(zip(self.topology.input_keys, args))
-        for key in self.topology.input_keys[len(args) :]:
-            try:
-                cache[key] = kwargs[key]
-            except KeyError:
-                raise ValueError(f"Missing required input for graph node: '{key}'")
+        cache.update(kwargs)
+
+        if len(cache) < expected_inputs:
+            missing = set(self.topology.input_keys) - cache.keys()
+            raise ValueError(f"Missing required inputs for graph nodes: {missing}")
 
         for node_name, module, deps in self._execution_plan:
-            inputs = tuple(cache[dep] for dep in deps)
+            inputs = tuple([cache[dep] for dep in deps])
             cache[node_name] = module(*inputs)
 
-        outputs = tuple(cache[key] for key in self.topology.output_keys)
-        return outputs[0] if len(outputs) == 1 else outputs
+        if len(self.topology.output_keys) == 1:
+            return cache[self.topology.output_keys[0]]
+        return tuple([cache[key] for key in self.topology.output_keys])
 
     @contextmanager
     def clone(self):
@@ -198,39 +200,42 @@ class DAG(nn.Module):
         plugin_type: type = BasePlugin,
         group_by: str = "type",
     ) -> Dict[str, Any]:
-        if not issubclass(plugin_type, BasePlugin):
-            raise TypeError(f"{plugin_type.__name__} must inherit from BasePlugin.")
+        if not issubclass(plugin_type, nn.Module):
+            raise TypeError(f"{plugin_type.__name__} must inherit from nn.Module.")
 
-        collected_plugins = {}
+        is_base_query = plugin_type is BasePlugin
+        collected_plugins = defaultdict(dict) if is_base_query else {}
 
-        for node_name, plugin_instance in self.module_pool.items():
-            if not isinstance(plugin_instance, plugin_type):
-                continue
+        for node_name in self.module_pool.keys():
+            for current_module in self._node_chain(node_name):
 
-            plugin_class_name = plugin_instance.__class__.__name__
-            suffix = f"_{plugin_class_name}"
+                if isinstance(current_module, plugin_type):
+                    plugin_class_name = current_module.__class__.__name__
+                    suffix = f"_{plugin_class_name}"
 
-            if node_name.endswith(suffix):
-                target_node = node_name[: -len(suffix)]
-            else:
-                target_node = node_name
+                    target_node = (
+                        node_name[: -len(suffix)]
+                        if node_name.endswith(suffix)
+                        else node_name
+                    )
 
-            if plugin_type is not BasePlugin:
-                collected_plugins[target_node] = plugin_instance
-                continue
+                    if not is_base_query:
+                        collected_plugins[target_node] = current_module
+                        continue
 
-            if group_by == "type":
-                if plugin_class_name not in collected_plugins:
-                    collected_plugins[plugin_class_name] = {}
-                collected_plugins[plugin_class_name][target_node] = plugin_instance
+                    if group_by == "type":
+                        collected_plugins[plugin_class_name][
+                            target_node
+                        ] = current_module
+                    elif group_by == "layer":
+                        collected_plugins[target_node][
+                            plugin_class_name
+                        ] = current_module
+                    else:
+                        raise ValueError("group_by must be 'type' or 'layer'")
 
-            elif group_by == "layer":
-                if target_node not in collected_plugins:
-                    collected_plugins[target_node] = {}
-                collected_plugins[target_node][plugin_class_name] = plugin_instance
-
-            else:
-                raise ValueError("group_by must be 'type' or 'layer'")
+        if is_base_query:
+            return {k: dict(v) for k, v in collected_plugins.items()}
 
         return collected_plugins
 
@@ -361,6 +366,13 @@ class DAG(nn.Module):
         dag._is_locked = True
 
         return dag
+
+    def _node_chain(self, node_key: str) -> Iterator[nn.Module]:
+        mod = self.module_pool[node_key] if node_key in self.module_pool else None
+        if mod is None:
+            return
+
+        yield from mod.unwrap() if hasattr(mod, "unwrap") else [mod]
 
     def _compile_execution_plan(self):
         self._execution_plan = []
