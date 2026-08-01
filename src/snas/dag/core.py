@@ -435,17 +435,20 @@ class DAG(nn.Module):
         def dfs(node: str, prefix: str, is_last: bool) -> None:
             connector = "└── " if is_last else "├── "
 
-            stats_label = ""
-            mod = self.module_pool[node] if node in self.module_pool else None
+            stats_parts = []
 
-            if isinstance(mod, BaseWrapper):
-                wrapper_name = mod.__class__.__name__
-                if hasattr(mod, "_result") and mod._result is not None:
-                    stats = mod.result.to_console()
-                    stats_label = f"  [{wrapper_name} -> {stats}]"
-                else:
-                    stats_label = f"  [Wrapped: {wrapper_name}]"
+            for current_mod in self._node_chain(node):
+                if isinstance(current_mod, BaseWrapper):
+                    wrapper_name = current_mod.__class__.__name__
+                    if (
+                        hasattr(current_mod, "result")
+                        and current_mod.result is not None
+                    ):
+                        stats_parts.append(f"[{wrapper_name} -> {current_mod.result}]")
+                    else:
+                        stats_parts.append(f"[Wrapped: {wrapper_name}]")
 
+            stats_label = ("  " + " ".join(stats_parts)) if stats_parts else ""
             lines.append(f"{prefix}{connector}{node}{stats_label}")
 
             if node in visited:
@@ -474,41 +477,55 @@ class DAG(nn.Module):
             )
 
         dot = graphviz.Digraph(comment="DAG Topology")
-
         dot.attr(
-            rankdir="LR",  # Left to Right pipeline
-            splines="spline",  # Smooth edges
-            nodesep="0.6",  # Vertical spacing
-            ranksep="0.8",  # Horizontal spacing
+            rankdir="LR",
+            splines="spline",
+            nodesep="0.6",
+            ranksep="0.8",
             fontname="Helvetica",
         )
-
         dot.attr("edge", color="#94a3b8", penwidth="1.5", arrowsize="0.8")
 
         def get_node_label(node_key: str, is_input: bool, is_output: bool) -> str:
             mod_label = ""
             stats_label = ""
+
             if not is_input:
                 mod = (
                     self.module_pool[node_key] if node_key in self.module_pool else None
                 )
 
-                if isinstance(mod, BaseWrapper):
-                    tgt_name = mod.target_module.__class__.__name__
-                    wrapper_name = mod.__class__.__name__
-                    mod_label = f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name} (Wrapped: {wrapper_name})</FONT>"
+                if mod is not None:
+                    wrapper_stats = []
 
-                    if hasattr(mod, "_result") and mod._result is not None:
-                        stats = mod.result.to_console()
-                        stats_label = f"<BR/><FONT POINT-SIZE='9' COLOR='#b91c1c'>[{stats}]</FONT>"
+                    base_mod = mod.root_module if isinstance(mod, BaseWrapper) else mod
 
-                elif isinstance(mod, OpModule):
-                    tgt_name = getattr(mod.target, "__name__", str(mod.target))
-                    mod_label = (
-                        f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name}</FONT>"
-                    )
-                elif mod is not None:
-                    mod_label = f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{mod.__class__.__name__}</FONT>"
+                    for current_mod in self._node_chain(node_key):
+                        if isinstance(current_mod, BaseWrapper):
+                            w_name = current_mod.__class__.__name__
+                            if (
+                                hasattr(current_mod, "result")
+                                and current_mod.result is not None
+                            ):
+                                wrapper_stats.append(
+                                    f"[{w_name} &#8594; {str(current_mod.result)}]"
+                                )
+                            else:
+                                wrapper_stats.append(f"[{w_name}]")
+
+                    if base_mod.__class__.__name__ == "OpModule":
+                        tgt_name = getattr(
+                            base_mod.target, "__name__", str(base_mod.target)
+                        )
+                    else:
+                        tgt_name = base_mod.__class__.__name__
+
+                    if wrapper_stats:
+                        mod_label = f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name} (Wrapped)</FONT>"
+                        stats_html = "<BR/>".join(wrapper_stats)
+                        stats_label = f"<BR/><FONT POINT-SIZE='9' COLOR='#b91c1c'>{stats_html}</FONT>"
+                    else:
+                        mod_label = f"<BR/><FONT POINT-SIZE='10' COLOR='#64748b'>{tgt_name}</FONT>"
 
             tag = ""
             if is_input:
@@ -521,7 +538,6 @@ class DAG(nn.Module):
         for key in self.topology.execution_order:
             is_input = key in self.topology.input_keys
             is_output = key in self.topology.output_keys
-
             label = get_node_label(key, is_input, is_output)
 
             if is_input:
