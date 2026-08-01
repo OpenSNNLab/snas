@@ -1,41 +1,43 @@
 import json
-from abc import ABC
-from dataclasses import asdict, dataclass
+from typing import Any, Dict, Iterator
 
 import torch.nn as nn
 
 
-@dataclass
-class BaseResult(ABC):
-    execution_count: int = 0
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    def to_json(self, filepath: str) -> None:
-        with open(filepath, "w") as f:
-            json.dump(self.to_dict(), f, indent=4)
-
-    def to_console(self) -> str:
-        return f"Execs: {self.execution_count}"
-
-
 class BasePlugin(nn.Module):
+    default_attach_mode: str = "after"
+
     def __init__(self) -> None:
         super().__init__()
-        self._result = None
+        self.execution_count: int = 0
 
     @property
-    def result(self) -> BaseResult:
-        if getattr(self, "_result", None) is None:
-            raise RuntimeError(f"Data not yet captured by {self.__class__.__name__}.")
-        return self._result
+    def result(self) -> str:
+        if self.execution_count == 0:
+            return "No data"
+        return f"{self.execution_count}x runs"
 
     def clear(self) -> None:
-        self._result = None
+        self.execution_count = 0
 
 
 class BaseWrapper(BasePlugin):
+    default_attach_mode: str = "wrap"
+
     def __init__(self, target_module: nn.Module) -> None:
         super().__init__()
         self.target_module = target_module
+
+    def unwrap(self) -> Iterator[nn.Module]:
+        current = self
+        while isinstance(current, BaseWrapper):
+            yield current
+            current = current.target_module
+
+        if current is not None:
+            yield current
+
+    @property
+    def root_module(self) -> nn.Module:
+        *_, root = self.unwrap()
+        return root
